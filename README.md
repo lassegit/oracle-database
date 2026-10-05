@@ -59,22 +59,33 @@ entrypoint so redeploys shut the database down cleanly.
 
 ## Variables
 
-| Variable | Required | Default | Purpose |
+The variable metadata lives in the **Railway template composer**, not in this
+repository. Each template variable has three fields — `isOptional`, `description`
+(the helper text shown at deploy time) and `defaultValue` — and the repository only
+reads the resulting values. Use the definitions below when configuring the service in
+the composer; the `Description` column is written to be pasted as the helper text.
+
+| Variable | Composer | Default value | Description |
 | --- | --- | --- | --- |
-| `ORACLE_PWD` | yes | generated | Password for `SYS`, `SYSTEM` and `PDBADMIN`. Applied on every start, so changing it and restarting rotates the password. |
-| `RAILWAY_RUN_UID` | yes | `0` | Runs the container as root so the wrapper can prepare the volume before dropping to the `oracle` user. |
-| `ORACLE_IMAGE_TAG` | no | `23.26.3.0-lite` | Build-time `ARG` selecting the image tag. Only use `-lite` tags; avoid `latest`. |
-| `RAILWAY_SHM_SIZE_BYTES` | recommended | `2147483648` | Size of `/dev/shm` (2 GiB). Covers Oracle memory configurations that place part of the memory areas in shared memory instead of the default 64 MB. |
-| `RAILWAY_DEPLOYMENT_DRAINING_SECONDS` | recommended | `30` | Seconds between SIGTERM and SIGKILL so Oracle can shut down gracefully on redeploy. |
-| `APP_USER` | no | — | Creates (or updates) a schema/user in `FREEPDB1` on startup. |
-| `APP_USER_PASSWORD` | no | — | Password for `APP_USER`. Change it and restart to rotate. |
+| `ORACLE_PWD` | required | `${{secret(32, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")}}` | Password for the Oracle `SYS`, `SYSTEM` and `PDBADMIN` users. Generated at deploy; it is applied on every start, so change it and restart the service to rotate it. |
+| `ORACLE_IMAGE_TAG` | required | `23.26.3.0-lite` | Container image tag to build. Use a `-lite` tag; `latest` and untagged names point at the ~3.7 GB full image. Move forward only (`23.26.0.0-lite` → `23.26.3.0-lite`) and test on a copy of the volume first. |
+| `RAILWAY_RUN_UID` | required | `0` | Runs the container as root so the wrapper can fix ownership of `/opt/oracle/oradata` before dropping privileges to the Oracle user. Required for Railway volumes. |
+| `RAILWAY_SHM_SIZE_BYTES` | required | `2147483648` | Size of `/dev/shm` in bytes (2 GiB), so Oracle shared-memory allocations are not limited by Railway's 64 MB default. |
+| `RAILWAY_DEPLOYMENT_DRAINING_SECONDS` | required | `30` | Seconds Railway waits between SIGTERM and SIGKILL on redeploy, giving Oracle time to shut down cleanly instead of recovering from a crash. |
+| `APP_USER` | optional | *(empty)* | Optional name of an application schema/user to create in `FREEPDB1` at startup (for example `app`). Leave empty to skip; when set, `APP_USER_PASSWORD` is used for it. |
+| `APP_USER_PASSWORD` | required | `${{secret(32, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")}}` | Password for `APP_USER`. Only used when `APP_USER` is set; generated at deploy and rotated by changing it and restarting. |
 
-Generate secrets with Railway's template variable functions, for example:
+Notes:
 
-```
-ORACLE_PWD=${{secret(32, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")}}
-APP_USER_PASSWORD=${{secret(32, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")}}
-```
+- Only `APP_USER` should have **Optional** enabled (`isOptional: true`) so a deploy is
+  not blocked on it. Everything else has a non-empty default, so it is prefilled.
+- `ORACLE_IMAGE_TAG` is declared as `ARG` before `FROM` in the `Dockerfile`; that is
+  how Railway passes the value into the Docker build. Changing it triggers a rebuild.
+- `RAILWAY_RUN_UID`, `RAILWAY_SHM_SIZE_BYTES` and
+  `RAILWAY_DEPLOYMENT_DRAINING_SECONDS` are consumed by Railway or the entrypoint;
+  they are not secrets.
+- `ORACLE_PWD` is the only value a user needs to copy out after deploying; it is
+  visible (masked) in the service's Variables tab.
 
 ## Connecting
 
