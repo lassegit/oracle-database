@@ -20,8 +20,8 @@ FROM container-registry.oracle.com/database/free:${ORACLE_IMAGE_TAG}
 # ownership before dropping privileges back to oracle.
 USER root
 
-COPY railway-entrypoint.sh /usr/local/bin/railway-entrypoint.sh
-RUN chmod 0755 /usr/local/bin/railway-entrypoint.sh
+COPY railway-entrypoint.sh healthcheck.sh /usr/local/bin/
+RUN chmod 0755 /usr/local/bin/railway-entrypoint.sh /usr/local/bin/healthcheck.sh
 
 # Optional, idempotent provisioners. The image runs every *.sh / *.sql in this
 # directory as the oracle user after the database is ready, on every container
@@ -30,9 +30,13 @@ COPY init/ /opt/oracle/scripts/startup/
 RUN chmod 0755 /opt/oracle/scripts/startup/*.sh \
     && chown -R oracle:oinstall /opt/oracle/scripts/startup
 
-# Keep the image's readiness probe working under the root entrypoint.
+# Keep the image's readiness probe working under the root entrypoint. The probe
+# also requires FREEPDB1 to be registered with the listener; the image's own
+# checkDBStatus.sh stays green when the listener has no services. Railway ignores
+# Docker healthchecks (it uses its own deploy-time checks), so this is mainly for
+# `docker run` and other platforms.
 HEALTHCHECK --interval=30s --start-period=600s --timeout=30s --retries=10 \
-  CMD setpriv --reuid=54321 --regid=54321 --init-groups -- /opt/oracle/checkDBStatus.sh >/dev/null || exit 1
+  CMD setpriv --reuid=54321 --regid=54321 --init-groups -- /usr/local/bin/healthcheck.sh
 
 # The wrapper starts as root, prepares the volume, then execs this command as
 # the oracle user with its full supplementary group list (dba, oper, ...).

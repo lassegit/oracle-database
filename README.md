@@ -24,10 +24,13 @@ repository builds a small Dockerfile that wraps the official image. It uses the
 **`-lite`** flavor (`23.26.3.0-lite`, ~0.9 GB compressed, multi-arch) instead of the
 full image (~3.7 GB) or the `latest` tag (which points at the full image). The lite
 image ships compressed, prebuilt data files that are expanded into the Railway volume on
-first start, so there is no 15-minute DBCA database creation step. Because Railway mounts
-volumes owned by root, the wrapper starts as root, makes `/opt/oracle/oradata` writable
-by the `oracle` user (UID 54321), then drops privileges and hands PID 1 to Oracle's
-entrypoint so redeploys shut the database down cleanly.
+first start, so there is no 15-minute DBCA database creation step. The `-lite` variant
+omits several components (Oracle Data Pump, RMAN, XML DB, sharding and more); check
+[Oracle's Free container image documentation](https://container-registry.oracle.com/ords/ocr/ba/database/free)
+before relying on them. Because Railway mounts volumes owned by root, the wrapper starts
+as root, makes `/opt/oracle/oradata` writable by the `oracle` user (UID 54321), then
+drops privileges and hands PID 1 to Oracle's entrypoint so redeploys shut the database
+down cleanly.
 
 ## Requirements
 
@@ -53,7 +56,7 @@ entrypoint so redeploys shut the database down cleanly.
 | Resource | Value |
 | --- | --- |
 | Service image | `container-registry.oracle.com/database/free:23.26.3.0-lite`, built by the `Dockerfile` in this repo |
-| Volume | `/opt/oracle/oradata` — database files and anything you write there (for example Data Pump dumps) |
+| Volume | `/opt/oracle/oradata` — database files and anything you write there |
 | TCP proxy | Optional, port `1521`, for clients outside Railway |
 | Private network | `<service>.railway.internal:1521`, service name `FREEPDB1` |
 
@@ -124,6 +127,27 @@ settings, then connect to `$RAILWAY_TCP_PROXY_DOMAIN:$RAILWAY_TCP_PROXY_PORT` wi
 same service name. Oracle Net does not encrypt the listener link by default, so prefer
 the private network for applications and use the proxy for admin access.
 
+### If clients get ORA-12514
+
+The `-lite` image's listener binds IPv4 (`0.0.0.0:1521`) only, while Oracle derives its
+service registration address from the container hostname. On Railway's IPv6-capable
+internal network that hostname can resolve to IPv6, leaving `FREE` and `FREEPDB1`
+unregistered and clients with `ORA-12514: TNS:listener does not currently know of
+service requested in connect descriptor`. `init/01-local-listener.sql` pins
+`local_listener` to `127.0.0.1` in both `CDB$ROOT` and `FREEPDB1` on every start (and
+persists it in the spfile), so this should not happen.
+
+To verify, open a shell in the container and ask the listener:
+
+```bash
+railway ssh
+lsnrctl status
+```
+
+Both `FREE` and `FREEPDB1` must be listed with status `READY`. If they are missing, run
+the statements from `init/01-local-listener.sql` manually as SYSDBA and check the
+deploy logs for errors from that file.
+
 ## One schema per sandbox
 
 Oracle Database Free caps the whole instance at 12 GB of user data, and every listener
@@ -178,21 +202,21 @@ Data lives on the Railway volume at `/opt/oracle/oradata` and survives redeploys
 Redeploying pauses the old deployment while the volume is attached (there is a short
 downtime) and replicas cannot be used with volumes.
 
-A volume is not a backup. Take backups with `expdp` to the volume (or a Railway
-bucket) and/or enable Railway's volume backups:
-
-```bash
-# inside the container / via `railway ssh`
-expdp system/"$ORACLE_PWD"@localhost:1521/FREEPDB1 \
-      full=y directory=DATA_PUMP_DIR dumpfile=backup_$(date +%F).dmp
-```
+A volume is not a backup. The `-lite` image does not ship Oracle Data Pump or RMAN
+(both are listed under Oracle's Lite image limitations), so `expdp`/`rman` backups are
+not available in this template. Use Railway's volume backups instead: open the service
+and go to the **Backups** tab to schedule daily/weekly/monthly backups or trigger one
+manually; backups are restored to the volume from the same tab. Take a manual backup
+before image upgrades or risky schema changes, and deploy the full image
+(`ORACLE_IMAGE_TAG=23.26.3.0`, on a new empty volume) if you need logical dumps.
 
 ## Version upgrades
 
 `ORACLE_IMAGE_TAG` is a build argument, so changing it rebuilds and redeploys the
 service. Oracle data files are versioned: move forward within the 23.26.x line, never
-downgrade, and test on a copy of the volume first. For anything larger, export/import
-with Data Pump. Do not switch to `latest`: it points at the **full** image, not the
+downgrade, and test on a copy of the volume first (restore a volume backup into a new
+service to try). Plan larger migrations around volume backups too — the `-lite` image has
+no Data Pump. Do not switch to `latest`: it points at the **full** image, not the
 lite one, and redeploying it can complicate the volume layout.
 
 ## Local testing
@@ -231,8 +255,8 @@ sqlplus system/change_me_123@//localhost:1521/FREEPDB1
   own internal business operations; unmodified redistribution is allowed under the
   FUTC as long as the license is included and no extra fee is charged for the
   programs. Oracle's terms, not this summary, control.
-- The Dockerfile, entrypoint and init scripts in this repository are released under the
-  [MIT license](LICENSE). The upstream image also contains scripts under Oracle's
+- The Dockerfile, entrypoint, healthcheck and init scripts in this repository are
+  released under the [MIT license](LICENSE). The upstream image also contains scripts under Oracle's
   [UPL 1.0](https://oss.oracle.com/licenses/upl/).
 - Oracle, Oracle Database and Java are trademarks of Oracle Corporation. This template
   is not affiliated with or endorsed by Oracle.
