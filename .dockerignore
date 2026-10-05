@@ -1,0 +1,12 @@
+# Nothing in this repository is needed in the Docker build context except the
+# Dockerfile, the entrypoint and the init scripts, so keep the context small.
+.git
+.github
+.research
+.testbin
+README.md
+LICENSE
+licenses
+.env
+.env.*
+.dockerignore
