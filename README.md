@@ -28,9 +28,9 @@ first start, so there is no 15-minute DBCA database creation step. The `-lite` v
 omits several components (Oracle Data Pump, RMAN, XML DB, sharding and more); check
 [Oracle's Free container image documentation](https://container-registry.oracle.com/ords/ocr/ba/database/free)
 before relying on them. Because Railway mounts volumes owned by root, the wrapper starts
-as root, makes `/opt/oracle/oradata` writable by the `oracle` user (UID 54321), then
-drops privileges and hands PID 1 to Oracle's entrypoint so redeploys shut the database
-down cleanly.
+as root, makes `/opt/oracle/oradata` writable by the `oracle` user (UID 54321), adds an
+IPv6 endpoint to the database listener, then drops privileges and hands PID 1 to
+Oracle's entrypoint so redeploys shut the database down cleanly.
 
 ## Requirements
 
@@ -92,7 +92,9 @@ Notes:
 
 ## Connecting
 
-The database listens on port `1521` on both the private network and the TCP proxy.
+The database listens on port `1521` on both the private network and the TCP proxy. The
+listener is dual-stack: IPv4 (`0.0.0.0:1521`) and IPv6 (`[::]:1521`), so it works in
+both new Railway environments (dual-stack private DNS) and legacy ones (IPv6-only).
 
 ```
 SID:           FREE
@@ -129,13 +131,14 @@ the private network for applications and use the proxy for admin access.
 
 ### If clients get ORA-12514
 
-The `-lite` image's listener binds IPv4 (`0.0.0.0:1521`) only, while Oracle derives its
-service registration address from the container hostname. On Railway's IPv6-capable
-internal network that hostname can resolve to IPv6, leaving `FREE` and `FREEPDB1`
-unregistered and clients with `ORA-12514: TNS:listener does not currently know of
-service requested in connect descriptor`. `init/01-local-listener.sql` pins
-`local_listener` to `127.0.0.1` in both `CDB$ROOT` and `FREEPDB1` on every start (and
-persists it in the spfile), so this should not happen.
+Oracle derives its service registration address from the container hostname, and on
+Railway's IPv6-capable internal network that hostname can resolve to IPv6. The `-lite`
+image's prebuilt spfile ships `local_listener=''`, so registration could aim at an
+address the listener is not on, leaving `FREE` and `FREEPDB1` unregistered and clients
+with `ORA-12514: TNS:listener does not currently know of service requested in connect
+descriptor`. `init/01-local-listener.sql` pins `local_listener` to `127.0.0.1` in both
+`CDB$ROOT` and `FREEPDB1` on every start (and persists it in the spfile), so this should
+not happen.
 
 To verify, open a shell in the container and ask the listener:
 
@@ -144,9 +147,11 @@ railway ssh
 lsnrctl status
 ```
 
-Both `FREE` and `FREEPDB1` must be listed with status `READY`. If they are missing, run
-the statements from `init/01-local-listener.sql` manually as SYSDBA and check the
-deploy logs for errors from that file.
+Both `FREE` and `FREEPDB1` must be listed with status `READY`, and the endpoints summary
+must include both `HOST=0.0.0.0` (IPv4) and `HOST=::` (IPv6). If services are missing,
+run the statements from `init/01-local-listener.sql` manually as SYSDBA and check the
+deploy logs for errors from that file. If only the IPv4 endpoint is listed, the host had
+no IPv6 stack when the container started.
 
 ## One schema per sandbox
 
